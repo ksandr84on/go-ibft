@@ -3,9 +3,8 @@ package messages
 import (
 	"testing"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
 )
 
 func TestMessages_ExtractCommittedSeals(t *testing.T) {

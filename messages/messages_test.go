@@ -1,14 +1,11 @@
 package messages
 
 import (
+	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
 	"strconv"
 	"testing"
 	"time"
-
-	"github.com/stretchr/testify/assert"
-	"go.uber.org/goleak"
-
-	"github.com/ksandr84on/go-ibft/messages/proto"
 )
 
 // generateRandomMessages generates random messages for the
@@ -54,10 +51,6 @@ func generateRandomMessages(
 	}
 
 	return messages
-}
-
-func TestMain(m *testing.M) {
-	goleak.VerifyTestMain(m)
 }
 
 // TestMessages_AddMessage tests if the message addition
@@ -219,10 +212,8 @@ func TestMessages_GetValidMessagesMessage(t *testing.T) {
 
 	for _, testCase := range testTable {
 		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
-
 			// Add the initial message set
 			messages := NewMessages()
 			defer messages.Close()
@@ -328,11 +319,9 @@ func TestMessages_EventManager(t *testing.T) {
 
 	// Create the subscription
 	subscription := messages.Subscribe(SubscriptionDetails{
-		MessageType: messageType,
-		View:        baseView,
-		HasQuorumFn: func(_ uint64, messages []*proto.Message, _ proto.MessageType) bool {
-			return len(messages) >= numMessages
-		},
+		MessageType:    messageType,
+		View:           baseView,
+		MinNumMessages: numMessages,
 	})
 
 	defer messages.Unsubscribe(subscription.ID)

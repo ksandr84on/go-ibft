@@ -7,14 +7,13 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/ksandr84on/go-ibft/messages"
 	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
 )
 
 // generateNodeAddresses generates dummy node addresses
-func generateNodeAddresses(count uint64) [][]byte {
+func generateNodeAddresses(count int) [][]byte {
 	addresses := make([][]byte, count)
 
 	for index := range addresses {
@@ -104,40 +103,6 @@ func buildBasicRoundChangeMessage(
 	}
 }
 
-// maxFaulty returns the maximum number of allowed
-// faulty nodes
-func maxFaulty(nodeCount uint64) uint64 {
-	return (nodeCount - 1) / 3
-}
-
-// quorum returns the minimum number of
-// required nodes to reach quorum
-func quorum(numNodes uint64) uint64 {
-	switch maxFaulty(numNodes) {
-	case 0:
-		return numNodes
-	default:
-		return uint64(math.Ceil(2 * float64(numNodes) / 3))
-	}
-}
-
-func commonHasQuorumFn(numNodes uint64) func(blockNumber uint64, messages []*proto.Message, msgType proto.MessageType) bool {
-	quorum := quorum(numNodes)
-
-	return func(blockNumber uint64, messages []*proto.Message, msgType proto.MessageType) bool {
-		switch msgType {
-		case proto.MessageType_PREPREPARE:
-			return len(messages) >= 0
-		case proto.MessageType_PREPARE:
-			return len(messages) >= int(quorum)-1
-		case proto.MessageType_ROUND_CHANGE, proto.MessageType_COMMIT:
-			return len(messages) >= int(quorum)
-		}
-
-		return false
-	}
-}
-
 // TestConsensus_ValidFlow tests the following scenario:
 // N = 4
 //
@@ -152,7 +117,7 @@ func TestConsensus_ValidFlow(t *testing.T) {
 	proposal := []byte("proposal")
 	proposalHash := []byte("proposal hash")
 	committedSeal := []byte("seal")
-	numNodes := uint64(4)
+	numNodes := 4
 	nodes := generateNodeAddresses(numNodes)
 	insertedBlocks := make([][]byte, numNodes)
 
@@ -168,7 +133,9 @@ func TestConsensus_ValidFlow(t *testing.T) {
 	// for the Backend, for all nodes
 	commonBackendCallback := func(backend *mockBackend, nodeIndex int) {
 		// Make sure the quorum function requires all nodes
-		backend.hasQuorumFn = commonHasQuorumFn(numNodes)
+		backend.quorumFn = func(_ uint64) uint64 {
+			return uint64(numNodes)
+		}
 
 		// Make sure the node ID is properly relayed
 		backend.idFn = func() []byte {
@@ -237,7 +204,7 @@ func TestConsensus_ValidFlow(t *testing.T) {
 
 				// Set the proposal creation method for node 0, since
 				// they are the proposer
-				backend.buildProposalFn = func(_ *proto.View) []byte {
+				backend.buildProposalFn = func(u uint64) []byte {
 					return proposal
 				}
 			},
@@ -277,7 +244,7 @@ func TestConsensus_ValidFlow(t *testing.T) {
 	cluster.runSequence(0)
 
 	// Wait until the main run loops finish
-	cluster.awaitCompletion()
+	cluster.stop()
 
 	// Make sure the inserted blocks match what node 0 proposed
 	for _, block := range insertedBlocks {
@@ -310,7 +277,7 @@ func TestConsensus_InvalidBlock(t *testing.T) {
 		[]byte("proposal hash 2"), // for proposal 2
 	}
 	committedSeal := []byte("seal")
-	numNodes := uint64(4)
+	numNodes := 4
 	nodes := generateNodeAddresses(numNodes)
 	insertedBlocks := make([][]byte, numNodes)
 
@@ -322,11 +289,30 @@ func TestConsensus_InvalidBlock(t *testing.T) {
 		}
 	}
 
+	maxFaulty := func(nodeCount int) uint64 {
+		return uint64((nodeCount - 1) / 3)
+	}
+
+	quorumOptimal := func(numNodes int) uint64 {
+		if maxFaulty(numNodes) == 0 {
+			return uint64(numNodes)
+		}
+
+		return uint64(math.Ceil(2 * float64(numNodes) / 3))
+	}
+
 	// commonBackendCallback is the common method modification required
 	// for the Backend, for all nodes
 	commonBackendCallback := func(backend *mockBackend, nodeIndex int) {
 		// Make sure the quorum function is Quorum optimal
-		backend.hasQuorumFn = commonHasQuorumFn(numNodes)
+		backend.quorumFn = func(_ uint64) uint64 {
+			return quorumOptimal(numNodes)
+		}
+
+		// Make sure the allowed faulty nodes function is accurate
+		backend.maximumFaultyNodesFn = func() uint64 {
+			return maxFaulty(numNodes)
+		}
 
 		// Make sure the node ID is properly relayed
 		backend.idFn = func() []byte {
@@ -401,14 +387,14 @@ func TestConsensus_InvalidBlock(t *testing.T) {
 			0: func(backend *mockBackend) {
 				commonBackendCallback(backend, 0)
 
-				backend.buildProposalFn = func(_ *proto.View) []byte {
+				backend.buildProposalFn = func(_ uint64) []byte {
 					return proposals[0]
 				}
 			},
 			1: func(backend *mockBackend) {
 				commonBackendCallback(backend, 1)
 
-				backend.buildProposalFn = func(_ *proto.View) []byte {
+				backend.buildProposalFn = func(_ uint64) []byte {
 					return proposals[1]
 				}
 			},
@@ -448,7 +434,7 @@ func TestConsensus_InvalidBlock(t *testing.T) {
 	cluster.runSequence(1)
 
 	// Wait until the main run loops finish
-	cluster.awaitCompletion()
+	cluster.stop()
 
 	// Make sure the nodes switched to the new round
 	assert.True(t, cluster.areAllNodesOnRound(1))

@@ -1,11 +1,9 @@
 package messages
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-
 	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestEventSubscription_EventSupported(t *testing.T) {
@@ -110,6 +108,16 @@ func TestEventSubscription_EventSupported(t *testing.T) {
 			false,
 		},
 		{
+			"Lower number of messages",
+			commonDetails,
+			signalDetails{
+				commonDetails.MessageType,
+				commonDetails.View,
+				commonDetails.MinNumMessages - 1,
+			},
+			false,
+		},
+		{
 			"Invalid message type",
 			commonDetails,
 			signalDetails{
@@ -159,6 +167,7 @@ func TestEventSubscription_EventSupported(t *testing.T) {
 				subscription.eventSupported(
 					event.messageType,
 					event.view,
+					event.totalMessages,
 				),
 			)
 		})

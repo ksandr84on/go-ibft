@@ -8,10 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/stretchr/testify/assert"
-
 	"github.com/ksandr84on/go-ibft/messages"
 	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
 )
 
 func proposalMatches(proposal []byte, message *proto.Message) bool {
@@ -208,12 +207,6 @@ func generateFilledRCMessages(
 	return roundChangeMessages
 }
 
-func defaultHasQuorumFn(quorum uint64) hasQuorumDelegate {
-	return func(_ uint64, messages []*proto.Message, msgType proto.MessageType) bool {
-		return len(messages) >= int(quorum)
-	}
-}
-
 // TestRunNewRound_Proposer checks that the node functions
 // correctly as the proposer for a block
 func TestRunNewRound_Proposer(t *testing.T) {
@@ -241,7 +234,7 @@ func TestRunNewRound_Proposer(t *testing.T) {
 					isProposerFn: func(_ []byte, _ uint64, _ uint64) bool {
 						return true
 					},
-					buildProposalFn: func(_ *proto.View) []byte {
+					buildProposalFn: func(_ uint64) []byte {
 						return newProposal
 					},
 					buildPrePrepareMessageFn: func(
@@ -325,8 +318,10 @@ func TestRunNewRound_Proposer(t *testing.T) {
 					isProposerFn: func(_ []byte, _ uint64, _ uint64) bool {
 						return true
 					},
-					hasQuorumFn: defaultHasQuorumFn(quorum),
-					buildProposalFn: func(_ *proto.View) []byte {
+					quorumFn: func(_ uint64) uint64 {
+						return quorum
+					},
+					buildProposalFn: func(_ uint64) []byte {
 						return proposal
 					},
 					buildPrepareMessageFn: func(_ []byte, view *proto.View) *proto.Message {
@@ -479,8 +474,10 @@ func TestRunNewRound_Proposer(t *testing.T) {
 					isProposerFn: func(_ []byte, _ uint64, _ uint64) bool {
 						return true
 					},
-					hasQuorumFn: defaultHasQuorumFn(quorum),
-					buildProposalFn: func(_ *proto.View) []byte {
+					quorumFn: func(_ uint64) uint64 {
+						return quorum
+					},
+					buildProposalFn: func(_ uint64) []byte {
 						return proposal
 					},
 					buildPrepareMessageFn: func(_ []byte, view *proto.View) *proto.Message {
@@ -590,8 +587,8 @@ func TestRunNewRound_Validator_Zero(t *testing.T) {
 			idFn: func() []byte {
 				return []byte("non proposer")
 			},
-			hasQuorumFn: func(_ uint64, messages []*proto.Message, _ proto.MessageType) bool {
-				return len(messages) >= 1
+			quorumFn: func(_ uint64) uint64 {
+				return 1
 			},
 			buildPrepareMessageFn: func(proposal []byte, view *proto.View) *proto.Message {
 				return &proto.Message{
@@ -758,8 +755,8 @@ func TestRunNewRound_Validator_NonZero(t *testing.T) {
 					idFn: func() []byte {
 						return []byte("non proposer")
 					},
-					hasQuorumFn: func(_ uint64, messages []*proto.Message, _ proto.MessageType) bool {
-						return len(messages) >= 1
+					quorumFn: func(_ uint64) uint64 {
+						return 1
 					},
 					buildPrepareMessageFn: func(proposal []byte, view *proto.View) *proto.Message {
 						return &proto.Message{
@@ -867,8 +864,8 @@ func TestRunPrepare(t *testing.T) {
 							},
 						}
 					},
-					hasQuorumFn: func(_ uint64, messages []*proto.Message, _ proto.MessageType) bool {
-						return len(messages) >= 1
+					quorumFn: func(_ uint64) uint64 {
+						return 1
 					},
 					isValidProposalHashFn: func(_ []byte, hash []byte) bool {
 						return bytes.Equal(proposalHash, hash)
@@ -951,8 +948,6 @@ func TestRunCommit(t *testing.T) {
 			t.Parallel()
 
 			var (
-				wg sync.WaitGroup
-
 				proposal                                         = []byte("block proposal")
 				proposalHash                                     = []byte("proposal hash")
 				signer                                           = []byte("signer")
@@ -974,8 +969,8 @@ func TestRunCommit(t *testing.T) {
 						insertedProposal = proposal
 						insertedCommittedSeals = committedSeals
 					},
-					hasQuorumFn: func(_ uint64, messages []*proto.Message, _ proto.MessageType) bool {
-						return len(messages) >= 1
+					quorumFn: func(_ uint64) uint64 {
+						return 1
 					},
 					isValidProposalHashFn: func(_ []byte, hash []byte) bool {
 						return bytes.Equal(proposalHash, hash)
@@ -1028,12 +1023,9 @@ func TestRunCommit(t *testing.T) {
 
 			ctx, cancelFn := context.WithCancel(context.Background())
 
-			wg.Add(1)
-
 			go func(i *IBFT) {
 				defer func() {
 					cancelFn()
-					wg.Done()
 				}()
 
 				select {
@@ -1062,7 +1054,6 @@ func TestRunCommit(t *testing.T) {
 			assert.Equal(t, insertedCommittedSeals, committedSeals)
 
 			// Make sure the proper done channel was notified
-			wg.Wait()
 			assert.True(t, doneReceived)
 		},
 	)
@@ -1133,7 +1124,6 @@ func TestIBFT_IsAcceptableMessage(t *testing.T) {
 
 	for _, testCase := range testTable {
 		testCase := testCase
-
 		t.Run(testCase.name, func(t *testing.T) {
 			t.Parallel()
 
@@ -1357,7 +1347,9 @@ func TestIBFT_FutureProposal(t *testing.T) {
 					isValidProposalHashFn: func(p []byte, hash []byte) bool {
 						return bytes.Equal(hash, proposalHash) && bytes.Equal(p, proposal)
 					},
-					hasQuorumFn: defaultHasQuorumFn(quorum),
+					quorumFn: func(_ uint64) uint64 {
+						return quorum
+					},
 				}
 				transport = mockTransport{}
 				mMessages = mockMessages{
@@ -1474,7 +1466,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1497,7 +1491,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1522,7 +1518,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1551,7 +1549,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1578,7 +1578,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1610,7 +1612,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 		)
 
@@ -1647,7 +1651,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 				isProposerFn: func(proposer []byte, _ uint64, _ uint64) bool {
 					return !bytes.Equal(proposer, sender)
 				},
@@ -1690,7 +1696,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 				isProposerFn: func(proposer []byte, _ uint64, _ uint64) bool {
 					return !bytes.Equal(proposer, sender)
 				},
@@ -1730,7 +1738,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 				isProposerFn: func(proposer []byte, _ uint64, _ uint64) bool {
 					return bytes.Equal(proposer, sender)
 				},
@@ -1774,7 +1784,9 @@ func TestIBFT_ValidPC(t *testing.T) {
 			log       = mockLogger{}
 			transport = mockTransport{}
 			backend   = mockBackend{
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 				isProposerFn: func(proposer []byte, _ uint64, _ uint64) bool {
 					return bytes.Equal(proposer, sender)
 				},
@@ -1948,7 +1960,9 @@ func TestIBFT_ValidateProposal(t *testing.T) {
 				isProposerFn: func(_ []byte, _ uint64, _ uint64) bool {
 					return true
 				},
-				hasQuorumFn: defaultHasQuorumFn(quorum),
+				quorumFn: func(_ uint64) uint64 {
+					return quorum
+				},
 			}
 			transport = mockTransport{}
 		)
@@ -2075,15 +2089,15 @@ func TestIBFT_WatchForFutureRCC(t *testing.T) {
 	setRoundForMessages(roundChangeMessages, rccRound)
 
 	var (
-		wg sync.WaitGroup
-
 		receivedRound = uint64(0)
 		notifyCh      = make(chan uint64, 1)
 
 		log       = mockLogger{}
 		transport = mockTransport{}
 		backend   = mockBackend{
-			hasQuorumFn: defaultHasQuorumFn(quorum),
+			quorumFn: func(_ uint64) uint64 {
+				return quorum
+			},
 			isProposerFn: func(_ []byte, _ uint64, _ uint64) bool {
 				return true
 			},
@@ -2112,14 +2126,10 @@ func TestIBFT_WatchForFutureRCC(t *testing.T) {
 	i.messages = messages
 
 	ctx, cancelFn := context.WithCancel(context.Background())
-
-	wg.Add(1)
+	defer cancelFn()
 
 	go func() {
-		defer func() {
-			cancelFn()
-			wg.Done()
-		}()
+		defer cancelFn()
 
 		select {
 		case r := <-i.roundCertificate:
@@ -2136,7 +2146,6 @@ func TestIBFT_WatchForFutureRCC(t *testing.T) {
 	i.wg.Wait()
 
 	// Make sure the notification round was correct
-	wg.Wait()
 	assert.Equal(t, rccRound, receivedRound)
 }
 
@@ -2178,7 +2187,9 @@ func TestIBFT_RunSequence_NewProposal(t *testing.T) {
 
 		log     = mockLogger{}
 		backend = mockBackend{
-			hasQuorumFn: defaultHasQuorumFn(quorum),
+			quorumFn: func(_ uint64) uint64 {
+				return quorum
+			},
 		}
 		transport = mockTransport{}
 	)
@@ -2238,7 +2249,9 @@ func TestIBFT_RunSequence_FutureRCC(t *testing.T) {
 
 		log     = mockLogger{}
 		backend = mockBackend{
-			hasQuorumFn: defaultHasQuorumFn(quorum),
+			quorumFn: func(_ uint64) uint64 {
+				return quorum
+			},
 		}
 		transport = mockTransport{}
 	)

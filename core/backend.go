@@ -53,7 +53,7 @@ type Backend interface {
 	Verifier
 
 	// BuildProposal builds a new block proposal
-	BuildProposal(view *proto.View) []byte
+	BuildProposal(blockNumber uint64) []byte
 
 	// InsertBlock inserts a proposal with the specified committed seals
 	InsertBlock(proposal []byte, committedSeals []*messages.CommittedSeal)
@@ -61,7 +61,11 @@ type Backend interface {
 	// ID returns the validator's ID
 	ID() []byte
 
-	// HasQuorum returns true if the quorum is reached
-	// for the specified block height.
-	HasQuorum(blockNumber uint64, messages []*proto.Message, msgType proto.MessageType) bool
+	// MaximumFaultyNodes returns the maximum number of faulty nodes based
+	// on the validator set.
+	MaximumFaultyNodes() uint64
+
+	// Quorum returns what is the quorum size for the
+	// specified block height.
+	Quorum(blockHeight uint64) uint64
 }

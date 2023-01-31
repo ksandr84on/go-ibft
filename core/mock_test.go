@@ -2,9 +2,7 @@ package core
 
 import (
 	"context"
-	"fmt"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/ksandr84on/go-ibft/messages"
@@ -15,7 +13,7 @@ import (
 type isValidBlockDelegate func([]byte) bool
 type isValidSenderDelegate func(*proto.Message) bool
 type isProposerDelegate func([]byte, uint64, uint64) bool
-type buildProposalDelegate func(*proto.View) []byte
+type buildProposalDelegate func(uint64) []byte
 type isValidProposalHashDelegate func([]byte, []byte) bool
 type isValidCommittedSealDelegate func([]byte, *messages.CommittedSeal) bool
 
@@ -32,9 +30,10 @@ type buildRoundChangeMessageDelegate func(
 	*proto.View,
 ) *proto.Message
 
+type quorumDelegate func(blockHeight uint64) uint64
 type insertBlockDelegate func([]byte, []*messages.CommittedSeal)
 type idDelegate func() []byte
-type hasQuorumDelegate func(uint64, []*proto.Message, proto.MessageType) bool
+type maximumFaultyNodesDelegate func() uint64
 
 // mockBackend is the mock backend structure that is configurable
 type mockBackend struct {
@@ -49,9 +48,10 @@ type mockBackend struct {
 	buildPrepareMessageFn     buildPrepareMessageDelegate
 	buildCommitMessageFn      buildCommitMessageDelegate
 	buildRoundChangeMessageFn buildRoundChangeMessageDelegate
+	quorumFn                  quorumDelegate
 	insertBlockFn             insertBlockDelegate
 	idFn                      idDelegate
-	hasQuorumFn               hasQuorumDelegate
+	maximumFaultyNodesFn      maximumFaultyNodesDelegate
 }
 
 func (m mockBackend) ID() []byte {
@@ -66,6 +66,14 @@ func (m mockBackend) InsertBlock(proposal []byte, committedSeals []*messages.Com
 	if m.insertBlockFn != nil {
 		m.insertBlockFn(proposal, committedSeals)
 	}
+}
+
+func (m mockBackend) Quorum(blockNumber uint64) uint64 {
+	if m.quorumFn != nil {
+		return m.quorumFn(blockNumber)
+	}
+
+	return 0
 }
 
 func (m mockBackend) IsValidBlock(block []byte) bool {
@@ -92,9 +100,9 @@ func (m mockBackend) IsProposer(id []byte, sequence, round uint64) bool {
 	return false
 }
 
-func (m mockBackend) BuildProposal(view *proto.View) []byte {
+func (m mockBackend) BuildProposal(blockNumber uint64) []byte {
 	if m.buildProposalFn != nil {
-		return m.buildProposalFn(view)
+		return m.buildProposalFn(blockNumber)
 	}
 
 	return nil
@@ -114,6 +122,14 @@ func (m mockBackend) IsValidCommittedSeal(proposal []byte, committedSeal *messag
 	}
 
 	return true
+}
+
+func (m mockBackend) MaximumFaultyNodes() uint64 {
+	if m.maximumFaultyNodesFn != nil {
+		return m.maximumFaultyNodesFn()
+	}
+
+	return 0
 }
 
 func (m mockBackend) BuildPrePrepareMessage(
@@ -161,14 +177,6 @@ func (m mockBackend) BuildRoundChangeMessage(
 		Type:    proto.MessageType_ROUND_CHANGE,
 		Payload: nil,
 	}
-}
-
-func (m mockBackend) HasQuorum(blockNumber uint64, messages []*proto.Message, msgType proto.MessageType) bool {
-	if m.hasQuorumFn != nil {
-		return m.hasQuorumFn(blockNumber, messages, msgType)
-	}
-
-	return true
 }
 
 // Define delegation methods
@@ -280,7 +288,7 @@ type transportConfigCallback func(*mockTransport)
 
 // newMockCluster creates a new IBFT cluster
 func newMockCluster(
-	numNodes uint64,
+	numNodes int,
 	backendCallbackMap map[int]backendConfigCallback,
 	loggerCallbackMap map[int]loggerConfigCallback,
 	transportCallbackMap map[int]transportConfigCallback,
@@ -290,9 +298,10 @@ func newMockCluster(
 	}
 
 	nodes := make([]*IBFT, numNodes)
-	nodeCtxs := make([]mockNodeContext, numNodes)
+	quitChannels := make([]chan struct{}, numNodes)
+	messageHandlersQuit := make([]chan struct{}, numNodes)
 
-	for index := 0; index < int(numNodes); index++ {
+	for index := 0; index < numNodes; index++ {
 		var (
 			logger    = &mockLogger{}
 			transport = &mockTransport{}
@@ -319,119 +328,48 @@ func newMockCluster(
 		}
 
 		// Create a new instance of the IBFT node
-		nodes[index] = NewIBFT(logger, backend, transport)
+		i := NewIBFT(logger, backend, transport)
 
-		// Instantiate context for the nodes
-		ctx, cancelFn := context.WithCancel(context.Background())
-		nodeCtxs[index] = mockNodeContext{
-			ctx:      ctx,
-			cancelFn: cancelFn,
-		}
+		// Instantiate quit channels for node routines
+		quitChannels[index] = make(chan struct{})
+		messageHandlersQuit[index] = make(chan struct{})
+
+		nodes[index] = i
 	}
 
 	return &mockCluster{
 		nodes: nodes,
-		ctxs:  nodeCtxs,
 	}
-}
-
-// mockNodeContext keeps track of the node runtime context
-type mockNodeContext struct {
-	ctx      context.Context
-	cancelFn context.CancelFunc
-}
-
-// mockNodeWg is the WaitGroup wrapper for the cluster nodes
-type mockNodeWg struct {
-	sync.WaitGroup
-	count int64
-}
-
-func (wg *mockNodeWg) Add(delta int) {
-	wg.WaitGroup.Add(delta)
-}
-
-func (wg *mockNodeWg) Done() {
-	wg.WaitGroup.Done()
-	atomic.AddInt64(&wg.count, 1)
-}
-
-func (wg *mockNodeWg) getDone() int64 {
-	return atomic.LoadInt64(&wg.count)
-}
-
-func (wg *mockNodeWg) resetDone() {
-	atomic.StoreInt64(&wg.count, 0)
 }
 
 // mockCluster represents a mock IBFT cluster
 type mockCluster struct {
-	nodes []*IBFT           // references to the nodes in the cluster
-	ctxs  []mockNodeContext // context handlers for the nodes in the cluster
+	nodes []*IBFT // references to the nodes in the cluster
 
-	wg mockNodeWg
+	wg sync.WaitGroup
 }
 
 func (m *mockCluster) runSequence(height uint64) {
-	m.wg.resetDone()
-
-	for nodeIndex, node := range m.nodes {
+	for _, node := range m.nodes {
 		m.wg.Add(1)
 
-		go func(
-			ctx context.Context,
-			node *IBFT,
-			height uint64,
-		) {
+		go func(node *IBFT, height uint64) {
 			defer func() {
 				m.wg.Done()
 			}()
 
 			// Start the main run loop for the node
-			node.RunSequence(ctx, height)
-		}(m.ctxs[nodeIndex].ctx, node, height)
+			node.RunSequence(context.Background(), height)
+		}(node, height)
 	}
 }
 
-// awaitCompletion waits for completion of all
-// nodes in the cluster
-func (m *mockCluster) awaitCompletion() {
+// stop sends a quit signal to all nodes
+// in the cluster
+func (m *mockCluster) stop() {
 	// Wait for all main run loops to signalize
 	// that they're finished
 	m.wg.Wait()
-}
-
-// forceShutdown sends a stop signal to all running nodes
-// in the cluster, and awaits their completion
-func (m *mockCluster) forceShutdown() {
-	// Send a stop signal to all the nodes
-	for _, ctx := range m.ctxs {
-		ctx.cancelFn()
-	}
-
-	// Wait for all the nodes to finish
-	m.awaitCompletion()
-}
-
-// awaitNCompletions awaits completion of the current sequence
-// for N nodes in the cluster
-func (m *mockCluster) awaitNCompletions(
-	ctx context.Context,
-	count int64,
-) error {
-	for {
-		select {
-		case <-ctx.Done():
-			return fmt.Errorf(
-				"await exceeded timeout for %d nodes",
-				count,
-			)
-		default:
-			if m.wg.getDone() >= count {
-				return nil
-			}
-		}
-	}
 }
 
 // pushMessage imitates a message passing service,
