@@ -1,11 +1,9 @@
 package messages
 
 import (
-	"testing"
-
-	"github.com/stretchr/testify/assert"
-
 	"github.com/ksandr84on/go-ibft/messages/proto"
+	"github.com/stretchr/testify/assert"
+	"testing"
 )
 
 func TestEventManager_SubscribeCancel(t *testing.T) {
@@ -49,7 +47,7 @@ func TestEventManager_SubscribeCancel(t *testing.T) {
 
 	go func() {
 		for {
-			em.signalEvent(baseDetails.MessageType, baseDetails.View)
+			em.signalEvent(baseDetails.MessageType, baseDetails.View, baseDetails.MinNumMessages)
 
 			select {
 			case <-quitCh:
