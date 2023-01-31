@@ -72,10 +72,7 @@ func (ms *Messages) AddMessage(message *proto.Message) {
 	// Append the message to the appropriate queue
 	messages := heightMsgMap.getViewMessages(message.View)
 	messages[string(message.From)] = message
-}
 
-// SignalEvent signals event
-func (ms *Messages) SignalEvent(message *proto.Message) {
 	ms.eventManager.signalEvent(
 		message.Type,
 		&proto.View{
@@ -85,7 +82,6 @@ func (ms *Messages) SignalEvent(message *proto.Message) {
 	)
 }
 
-// Close closes event manager
 func (ms *Messages) Close() {
 	ms.eventManager.close()
 }
@@ -210,52 +206,6 @@ func (ms *Messages) GetValidMessages(
 	}
 
 	return validMessages
-}
-
-// GetExtendedRCC returns Round-Change-Certificate for the highest round
-func (ms *Messages) GetExtendedRCC(
-	height uint64,
-	isValidMessage func(message *proto.Message) bool,
-	isValidRCC func(round uint64, messages []*proto.Message) bool,
-) []*proto.Message {
-	messageType := proto.MessageType_ROUND_CHANGE
-
-	mux := ms.muxMap[messageType]
-	mux.Lock()
-	defer mux.Unlock()
-
-	// Get all ROUND-CHANGE messages for the height
-	roundMessageMap := ms.getMessageMap(messageType)[height]
-
-	var (
-		highestRound uint64
-		extendedRCC  []*proto.Message
-	)
-
-	for round, messages := range roundMessageMap {
-		validMessages := make([]*proto.Message, 0, len(messages))
-
-		if round <= highestRound {
-			continue
-		}
-
-		for _, msg := range messages {
-			if !isValidMessage(msg) {
-				continue
-			}
-
-			validMessages = append(validMessages, msg)
-		}
-
-		if !isValidRCC(round, validMessages) {
-			continue
-		}
-
-		highestRound = round
-		extendedRCC = validMessages
-	}
-
-	return extendedRCC
 }
 
 // GetMostRoundChangeMessages fetches most round change messages

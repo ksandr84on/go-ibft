@@ -16,19 +16,19 @@ const (
 	fin
 )
 
-func (s stateType) String() string {
+func (s stateType) String() (str string) {
 	switch s {
 	case newRound:
-		return "new round"
+		str = "new round"
 	case prepare:
-		return "prepare"
+		str = "prepare"
 	case commit:
-		return "commit"
+		str = "commit"
 	case fin:
-		return "fin"
+		str = "fin"
 	}
 
-	return ""
+	return
 }
 
 type state struct {
@@ -40,11 +40,11 @@ type state struct {
 	// latestPC is the latest prepared certificate
 	latestPC *proto.PreparedCertificate
 
-	// latestPreparedProposal is the proposal
+	// latestPreparedProposedBlock is the block
 	// for which Q(N)-1 PREPARE messages were received
-	latestPreparedProposal *proto.Proposal
+	latestPreparedProposedBlock []byte
 
-	//	accepted proposal for current round
+	//	accepted block proposal for current round
 	proposalMessage *proto.Message
 
 	//	validated commit seals
@@ -75,7 +75,7 @@ func (s *state) clear(height uint64) {
 	s.name = newRound
 	s.proposalMessage = nil
 	s.latestPC = nil
-	s.latestPreparedProposal = nil
+	s.latestPreparedProposedBlock = nil
 
 	s.view = &proto.View{
 		Height: height,
@@ -90,11 +90,11 @@ func (s *state) getLatestPC() *proto.PreparedCertificate {
 	return s.latestPC
 }
 
-func (s *state) getLatestPreparedProposal() *proto.Proposal {
+func (s *state) getLatestPreparedProposedBlock() []byte {
 	s.RLock()
 	defer s.RUnlock()
 
-	return s.latestPreparedProposal
+	return s.latestPreparedProposedBlock
 }
 
 func (s *state) getProposalMessage() *proto.Message {
@@ -132,22 +132,12 @@ func (s *state) getHeight() uint64 {
 	return s.view.Height
 }
 
-func (s *state) getProposal() *proto.Proposal {
+func (s *state) getProposal() []byte {
 	s.RLock()
 	defer s.RUnlock()
 
 	if s.proposalMessage != nil {
 		return messages.ExtractProposal(s.proposalMessage)
-	}
-
-	return nil
-}
-
-func (s *state) getRawDataFromProposal() []byte {
-	proposal := s.getProposal()
-
-	if proposal != nil {
-		return proposal.RawProposal
 	}
 
 	return nil
@@ -208,13 +198,13 @@ func (s *state) newRound() {
 
 func (s *state) finalizePrepare(
 	certificate *proto.PreparedCertificate,
-	latestPPB *proto.Proposal,
+	latestPPB []byte,
 ) {
 	s.Lock()
 	defer s.Unlock()
 
 	s.latestPC = certificate
-	s.latestPreparedProposal = latestPPB
+	s.latestPreparedProposedBlock = latestPPB
 
 	// Move to the commit state
 	s.name = commit

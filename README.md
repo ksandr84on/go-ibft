@@ -1,3 +1,5 @@
+[![codecov](https://codecov.io/gh/ksandr84on/go-ibft/branch/main/graph/badge.svg?token=0vLkmaEq3h)](https://codecov.io/gh/ksandr84on/go-ibft)
+
 # go-ibft README
 
 ## Overview
